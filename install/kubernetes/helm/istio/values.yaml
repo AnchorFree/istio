@@ -13,7 +13,7 @@ global:
   # ingress.enabled is set to true. You can also set it
   # to ingressgateway, or any other gateway you define in the 'gateway'
   # section.
-  k8sIngressSelector: ingress
+  k8sIngressSelector: ingressgateway
 
   # k8sIngressHttps will add port 443 on the ingress and ingressgateway.
   # It REQUIRES that the certificates are installed  in the
@@ -95,6 +95,8 @@ global:
 
   # ImagePullSecrets for all ServiceAccount, list of secrets in the same namespace
   # to use for pulling any images in pods that reference this ServiceAccount.
+  # For components that don't use ServiceAccounts (i.e. grafana, servicegraph, tracing)
+  # ImagePullSecrets will be added to the corresponding Deployment(StatefulSet) objects.
   # Must be set for any clustser configured with privte docker registry.
   imagePullSecrets:
     # - private-registry-key
@@ -153,7 +155,7 @@ global:
   # For helm < 2.9, crds must be installed ahead of time with
   # 'kubectl apply -f install/kubernetes/helm/istio/templates/crds.yaml
   # and this options must be set off.
-  crds: true
+  crds: false
 
 #
 # ingress configuration
@@ -166,7 +168,7 @@ ingress:
   service:
     annotations: {}
     loadBalancerIP: ""
-    type: LoadBalancer #change to NodePort, ClusterIP or LoadBalancer if need be
+    type: NodePort #change to NodePort, ClusterIP or LoadBalancer if need be
     ports:
     - port: 80
       name: http
@@ -188,6 +190,7 @@ gateways:
 
   istio-ingressgateway:
     enabled: true
+    kind: DaemonSet
     labels:
       app: istio-ingressgateway
       istio: ingressgateway
@@ -202,19 +205,32 @@ gateways:
       #  cpu: 1800m
       #  memory: 256Mi
 
+    hostNetwork: true
+
+    rewriteAffinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+          - matchExpressions:
+            - key: tier
+              operator: In
+              values:
+                - vault
+                - service
+
     loadBalancerIP: ""
+    loadBalancerSourceRanges: {}
     serviceAnnotations: {}
-    type: LoadBalancer #change to NodePort, ClusterIP or LoadBalancer if need be
+    type: NodePort #change to NodePort, ClusterIP or LoadBalancer if need be
 
     ports:
       ## You can add custom gateway ports
     - port: 80
-      targetPort: 80
       name: http2
-      nodePort: 31380
+      hostPort: 80
     - port: 443
       name: https
-      nodePort: 31390
+      hostPort: 443
     - port: 31400
       name: tcp
       nodePort: 31400
@@ -229,21 +245,62 @@ gateways:
     # Telemetry-related ports are enabled in gateway - but will only redirect if
     # the gateway configration for the various components are enabled.
     - port: 15030
-      targetPort: 15030
+      hostPort: 15030
       name: http2-prometheus
     - port: 15031
-      targetPort: 15031
+      hostPort: 15031
       name: http2-grafana
     secretVolumes:
-    - name: ingressgateway-certs
-      secretName: istio-ingressgateway-certs
-      mountPath: /etc/istio/ingressgateway-certs
+    - name: vault-certs
+      secretName: vault.afdevops.com
+      mountPath: /etc/istio/vault-certs
+    - name: wildcard-vault-certs
+      secretName: wildcard.vault.afdevops.com
+      mountPath: /etc/istio/wildcard-vault-certs
     - name: ingressgateway-ca-certs
       secretName: istio-ingressgateway-ca-certs
       mountPath: /etc/istio/ingressgateway-ca-certs
 
+    additionalContainers:
+    - name: wildcard-trigger
+      image: busybox:1.29.2
+      args:
+        - "sh"
+        - "-c"
+        - "while true; do \
+          if [ -e /etc/check ]; then \
+            if [ /etc/check -nt /tmp/check ]; then \
+              killall -HUP envoy; \
+            fi; \
+            touch /tmp/check; \
+          fi; \
+          sleep 10; \
+          done"
+      volumeMounts:
+      - name: wildcard-vault-certs
+        mountPath: /etc/check
+    - name: vault-trigger
+      image: busybox:1.29.2
+      args:
+        - "sh"
+        - "-c"
+        - "while true; do \
+          if [ -e /etc/check ]; then \
+            if [ /etc/check -nt /tmp/check ]; then \
+              killall -HUP envoy; \
+            fi; \
+            touch /tmp/check; \
+          fi; \
+          sleep 10; \
+        done"
+      volumeMounts:
+      - name: vault-certs
+        mountPath: /etc/check
+
+
   istio-egressgateway:
     enabled: true
+    kind: Deployment
     labels:
       app: istio-egressgateway
       istio: egressgateway
@@ -253,67 +310,67 @@ gateways:
     serviceAnnotations: {}
     type: ClusterIP #change to NodePort or LoadBalancer if need be
     ports:
-      - port: 80
-        name: http2
-      - port: 443
-        name: https
+    - port: 80
+      name: http2
+    - port: 443
+      name: https
     secretVolumes:
-      - name: egressgateway-certs
-        secretName: istio-egressgateway-certs
-        mountPath: /etc/istio/egressgateway-certs
-      - name: egressgateway-ca-certs
-        secretName: istio-egressgateway-ca-certs
-        mountPath: /etc/istio/egressgateway-ca-certs
+    - name: egressgateway-certs
+      secretName: istio-egressgateway-certs
+      mountPath: /etc/istio/egressgateway-certs
+    - name: egressgateway-ca-certs
+      secretName: istio-egressgateway-ca-certs
+      mountPath: /etc/istio/egressgateway-ca-certs
 
   # Mesh ILB gateway creates a gateway of type InternalLoadBalancer,
   # for mesh expansion. It exposes the mtls ports for Pilot,CA as well
   # as non-mtls ports to support upgrades and gradual transition.
   istio-ilbgateway:
-      enabled: false
-      labels:
-        app: istio-ilbgateway
-        istio: ilbgateway
-      replicaCount: 1
-      autoscaleMin: 1
-      autoscaleMax: 5
-      resources:
-        requests:
-          cpu: 800m
-          memory: 512Mi
-        #limits:
-        #  cpu: 1800m
-        #  memory: 256Mi
-      loadBalancerIP: ""
-      serviceAnnotations:
-        cloud.google.com/load-balancer-type: "internal"
-      type: LoadBalancer
-      ports:
-      ## You can add custom gateway ports - google ILB default quota is 5 ports,
-      - port: 15011
-        name: grpc-pilot-mtls
-      # Insecure port - only for migration from 0.8. Will be removed in 1.1
-      - port: 15010
-        name: grpc-pilot
-      - port: 8060
-        targetPort: 8060
-        name: tcp-citadel-grpc-tls
-      # Port 5353 is forwarded to kube-dns
-      - port: 5353
-        name: tcp-dns
-      secretVolumes:
-      - name: ilbgateway-certs
-        secretName: istio-ilbgateway-certs
-        mountPath: /etc/istio/ilbgateway-certs
-      - name: ilbgateway-ca-certs
-        secretName: istio-ilbgateway-ca-certs
-        mountPath: /etc/istio/ilbgateway-ca-certs
+    enabled: false
+    labels:
+      app: istio-ilbgateway
+      istio: ilbgateway
+    replicaCount: 1
+    autoscaleMin: 1
+    autoscaleMax: 5
+    resources:
+      requests:
+        cpu: 800m
+        memory: 512Mi
+      #limits:
+      #  cpu: 1800m
+      #  memory: 256Mi
+    loadBalancerIP: ""
+    serviceAnnotations:
+      cloud.google.com/load-balancer-type: "internal"
+    type: LoadBalancer
+    ports:
+    ## You can add custom gateway ports - google ILB default quota is 5 ports,
+    - port: 15011
+      name: grpc-pilot-mtls
+    # Insecure port - only for migration from 0.8. Will be removed in 1.1
+    - port: 15010
+      name: grpc-pilot
+    - port: 8060
+      targetPort: 8060
+      name: tcp-citadel-grpc-tls
+    # Port 5353 is forwarded to kube-dns
+    - port: 5353
+      name: tcp-dns
+    secretVolumes:
+    - name: ilbgateway-certs
+      secretName: istio-ilbgateway-certs
+      mountPath: /etc/istio/ilbgateway-certs
+    - name: ilbgateway-ca-certs
+      secretName: istio-ilbgateway-ca-certs
+      mountPath: /etc/istio/ilbgateway-ca-certs
 
 
 #
 # sidecar-injector webhook configuration
 #
 sidecarInjectorWebhook:
-  enabled: true
+  enabled: false
   replicaCount: 1
   image: sidecar_injector
   enableNamespacesByDefault: false
@@ -384,13 +441,15 @@ security:
 #
 telemetry-gateway:
   gatewayName: ingressgateway
-  grafanaEnabled: false
-  prometheusEnabled: false
+  grafanaEnabled: true
+  prometheusEnabled: true
 
 grafana:
-  enabled: false
+  enabled: true
   replicaCount: 1
   image: grafana
+  persist: false
+  storageClassName: ""
   security:
     enabled: false
     adminUser: admin
@@ -415,7 +474,7 @@ prometheus:
       port: 32090
 
 servicegraph:
-  enabled: false
+  enabled: true
   replicaCount: 1
   image: servicegraph
   service:
@@ -425,7 +484,7 @@ servicegraph:
     externalPort: 8088
     internalPort: 8088
   ingress:
-    enabled: false
+    enabled: true
     # Used to create an Ingress record.
     hosts:
       - servicegraph.local
@@ -441,7 +500,7 @@ servicegraph:
   prometheusAddr: http://prometheus:9090
 
 tracing:
-  enabled: false
+  enabled: true
   provider: jaeger
   jaeger:
     hub: docker.io/jaegertracing
@@ -451,7 +510,7 @@ tracing:
     ui:
       port: 16686
     ingress:
-      enabled: false
+      enabled: true
       # Used to create an Ingress record.
       hosts:
         - jaeger.local
@@ -471,7 +530,7 @@ tracing:
     externalPort: 9411
     internalPort: 9411
   ingress:
-    enabled: false
+    enabled: true
     # Used to create an Ingress record.
     hosts:
       - tracing.local
@@ -485,7 +544,7 @@ tracing:
       #     - tracing.local
 
 kiali:
-  enabled: false
+  enabled: true
   replicaCount: 1
   hub: docker.io/kiali
   tag: istio-release-1.0
