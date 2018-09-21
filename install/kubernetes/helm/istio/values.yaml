@@ -462,7 +462,7 @@ grafana:
     internalPort: 3000
 
 prometheus:
-  enabled: true
+  enabled: false
   replicaCount: 1
   hub: docker.io/prom
   tag: v2.3.1
@@ -544,7 +544,7 @@ tracing:
       #     - tracing.local
 
 kiali:
-  enabled: true
+  enabled: false
   replicaCount: 1
   hub: docker.io/kiali
   tag: istio-release-1.0

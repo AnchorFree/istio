@@ -1,0 +1,24 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: istio-telemetry
+  namespace: {{ .Values.global.monitoring.namespace }}
+  labels:
+    chart: {{ $.Chart.Name }}-{{ $.Chart.Version | replace "+" "_" }}
+    release: {{ $.Release.Name }}
+    istio: mixer
+    prometheus: {{ .Values.global.monitoring.prometheus }}
+spec:
+  endpoints:
+  - honorLabels: true
+    interval: 15s
+    scrapeTimeout: 10s
+    port: prometheus
+  jobLabel: component
+  namespaceSelector:
+    matchNames:
+    - istio-system
+  selector:
+    matchLabels:
+      istio: mixer
+      istio-mixer-type: telemetry
