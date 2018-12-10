@@ -37,6 +37,9 @@ global:
     # disable access log for sidecar.
     accessLogFile: "/dev/stdout"
 
+    # Log as JSON, default is false
+    logAsJSON: false
+
     # If set, newly injected sidecars will have core dumps enabled.
     enableCoreDump: false
 
