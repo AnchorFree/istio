@@ -7,7 +7,6 @@ metadata:
     chart: {{ $.Chart.Name }}-{{ $.Chart.Version | replace "+" "_" }}
     release: {{ $.Release.Name }}
     istio: mixer
-    prometheus: {{ .Values.global.monitoring.prometheus }}
 spec:
   endpoints:
   - honorLabels: true
@@ -21,4 +20,4 @@ spec:
   selector:
     matchLabels:
       istio: mixer
-      istio-mixer-type: telemetry
+      release: {{ $.Release.Name }}
